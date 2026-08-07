@@ -1,6 +1,8 @@
 /**
  * @file vTaskControl.c
- * @brief Controlador PID con control por teclado (UART)
+ * @brief Controlador PID con cámara - ETAPA 4
+ *        - Si hay datos de cámara: setpoint = ángulo de la cámara
+ *        - Si NO hay datos de cámara: setpoint = 0° (fijo)
  */
 
 #include "tareas.h"
@@ -10,7 +12,8 @@
 #include "esp_timer.h"
 #include <math.h>
 #include <string.h>
-#include "driver/uart.h"      /* ← Para UART */
+#include "driver/uart.h"
+#include "vision.h"
 
 #include "communication_protocol.h"
 #include "espnow_display.h"
@@ -35,14 +38,19 @@ static float s_filtered_angle = 0.0f;
 static int64_t s_last_update_us = 0;
 
 /* ──────────────────────────────────────────────────────────────
- *  LECTURA DE TECLADO (VERSIÓN UART - NO CRASHEA)
+ *  CONTROL DE CÁMARA
  * ────────────────────────────────────────────────────────────── */
+static float s_ultimo_angulo_camara = 0.0f;
+static uint32_t s_ultimo_timestamp_camara = 0U;
+static bool s_tiene_datos_camara = false;
 
-static void leer_comando_teclado(float *setpoint)
+/* ──────────────────────────────────────────────────────────────
+ *  LECTURA DE TECLADO (SOLO PARA DIAGNÓSTICO)
+ * ────────────────────────────────────────────────────────────── */
+static void leer_comando_teclado(void)
 {
     uint8_t data[RX_BUF_SIZE] = {0};
     
-    /* Verificar si hay datos disponibles */
     int bytes_available = 0;
     uart_get_buffered_data_len(UART_NUM, (size_t*)&bytes_available);
     
@@ -56,40 +64,17 @@ static void leer_comando_teclado(float *setpoint)
         char comando = data[0];
         
         switch (comando) {
-            case '+':
-                *setpoint += 5.0f;
-                ESP_LOGI(TAG, "📈 Setpoint: %.1f°", *setpoint);
-                break;
-            case '-':
-                *setpoint -= 5.0f;
-                ESP_LOGI(TAG, "📉 Setpoint: %.1f°", *setpoint);
-                break;
-            case '=':
-                *setpoint += 1.0f;
-                ESP_LOGI(TAG, "📈 Setpoint: %.1f°", *setpoint);
-                break;
-            case '_':
-                *setpoint -= 1.0f;
-                ESP_LOGI(TAG, "📉 Setpoint: %.1f°", *setpoint);
-                break;
-            case '0':
-                *setpoint = 0.0f;
-                ESP_LOGI(TAG, "🔄 Setpoint: 0.0°");
-                break;
             case 'r':
                 control_resetear();
                 ESP_LOGI(TAG, "🔄 PID reseteado");
                 break;
             case 'h':
                 ESP_LOGI(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                ESP_LOGI(TAG, "📖 CONTROLES DE TECLADO:");
-                ESP_LOGI(TAG, "   '+'  → Setpoint +5°");
-                ESP_LOGI(TAG, "   '-'  → Setpoint -5°");
-                ESP_LOGI(TAG, "   '='  → Setpoint +1°");
-                ESP_LOGI(TAG, "   '_'  → Setpoint -1°");
-                ESP_LOGI(TAG, "   '0'  → Setpoint = 0°");
+                ESP_LOGI(TAG, "📖 CONTROLES DE TECLADO (ETAPA 4):");
                 ESP_LOGI(TAG, "   'r'  → Resetear PID");
                 ESP_LOGI(TAG, "   'h'  → Mostrar ayuda");
+                ESP_LOGI(TAG, "   La cámara controla el setpoint automáticamente");
+                ESP_LOGI(TAG, "   Si no hay cámara → setpoint = 0°");
                 ESP_LOGI(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 break;
             default:
@@ -101,7 +86,6 @@ static void leer_comando_teclado(float *setpoint)
 /* ──────────────────────────────────────────────────────────────
  *  FUNCIONES AUXILIARES
  * ────────────────────────────────────────────────────────────── */
-
 static float clamp_float(float value, float min, float max)
 {
     if (value < min) return min;
@@ -140,7 +124,6 @@ const char* state_to_string(control_state_t state)
 /* ──────────────────────────────────────────────────────────────
  *  ACTUALIZACIÓN DEL MODO DE OPERACIÓN
  * ────────────────────────────────────────────────────────────── */
-
 static operating_mode_t update_operating_mode(
     operating_mode_t current_mode,
     float reference_deg)
@@ -175,7 +158,6 @@ static operating_mode_t update_operating_mode(
 /* ──────────────────────────────────────────────────────────────
  *  SELECCIÓN DE PARÁMETROS SEGÚN MODO
  * ────────────────────────────────────────────────────────────── */
-
 static void select_parameters(
     operating_mode_t mode,
     float *kp, float *ki, float *kd,
@@ -222,7 +204,6 @@ static void select_parameters(
 /* ──────────────────────────────────────────────────────────────
  *  CÁLCULO DE VELOCIDAD POR VENTANA
  * ────────────────────────────────────────────────────────────── */
-
 static float calculate_velocity(
     float current_angle,
     int64_t current_time_us,
@@ -255,7 +236,6 @@ static float calculate_velocity(
 /* ──────────────────────────────────────────────────────────────
  *  FUNCIONES PÚBLICAS (control.h)
  * ────────────────────────────────────────────────────────────── */
-
 esp_err_t control_inicializar(void)
 {
     memset(&s_ctrl, 0, sizeof(s_ctrl));
@@ -278,12 +258,12 @@ esp_err_t control_inicializar(void)
     s_last_update_us = now;
 
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "🔧 CONTROLADOR PID - CON TECLADO UART");
-    ESP_LOGI(TAG, "   Setpoint INICIAL: 0.0°");
+    ESP_LOGI(TAG, "🔧 CONTROLADOR PID - ETAPA 4 (CON CÁMARA)");
+    ESP_LOGI(TAG, "   Setpoint = 0° (fijo) si no hay cámara");
+    ESP_LOGI(TAG, "   Setpoint = ángulo de cámara si hay datos");
     ESP_LOGI(TAG, "   Modo Normal: KP=%.2f KI=%.2f KD=%.2f", NORMAL_KP, NORMAL_KI, NORMAL_KD);
     ESP_LOGI(TAG, "   Modo Alto Pos (>24°): KP=%.2f", HIGH_POSITIVE_KP);
     ESP_LOGI(TAG, "   Modo Alto Neg (<-24°): KP=%.2f", HIGH_NEGATIVE_KP);
-    ESP_LOGI(TAG, "   Emergencia: >%.0f° o <%.0f°", EMERGENCY_ANGLE_DEG, -EMERGENCY_ANGLE_DEG);
     ESP_LOGI(TAG, "========================================");
 
     return ESP_OK;
@@ -302,11 +282,11 @@ float control_obtener_setpoint(void)
 void control_fijar_setpoint(float setpoint)
 {
     s_ctrl.target_reference = setpoint;
-    static float ultimo_setpoint = -999.0f;
-    if (fabsf(setpoint - ultimo_setpoint) > 0.01f) {
-        ESP_LOGI(TAG, "📌 Setpoint: %.1f°", setpoint);
-        ultimo_setpoint = setpoint;
-    }
+}
+
+void control_set_modo_auto(bool modo_auto)
+{
+    (void)modo_auto;
 }
 
 void control_resetear(void)
@@ -338,9 +318,8 @@ float control_obtener_angulo_filtrado(void)
 }
 
 /* ──────────────────────────────────────────────────────────────
- *  ACTUALIZACIÓN DEL CONTROLADOR
+ *  ACTUALIZACIÓN DEL CONTROLADOR (IGUAL QUE ETAPA 3)
  * ────────────────────────────────────────────────────────────── */
-
 static control_state_t control_pid_update(
     float angle_actual,
     float dt_s,
@@ -491,14 +470,16 @@ static control_state_t control_pid_update(
 }
 
 /* ──────────────────────────────────────────────────────────────
- *  TAREA DE CONTROL CON TECLADO
+ *  TAREA DE CONTROL - ETAPA 4 (CON CÁMARA)
+ *  Estrategia: Setpoint = 0° fijo si no hay cámara
+ *              Setpoint = ángulo de cámara si hay datos
  * ────────────────────────────────────────────────────────────── */
-
 void vTaskControl(void *pvParameters)
 {
     (void)pvParameters;
 
     SensorData_t sensor_data = {0};
+    VisionData_t vision_data = {0};
     ActuadorData_t actuador_data = {0};
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -507,9 +488,13 @@ void vTaskControl(void *pvParameters)
     float setpoint_actual = 0.0f;
     control_fijar_setpoint(setpoint_actual);
 
-    ESP_LOGI(TAG, "🔄 Tarea de control iniciada - Setpoint INICIAL: %.1f°", setpoint_actual);
-    ESP_LOGI(TAG, "📖 Presiona '+' para aumentar, '-' para disminuir, '0' para resetear");
-    ESP_LOGI(TAG, "📖 Presiona 'h' para ver todos los controles");
+    ESP_LOGI(TAG, "🔄 Tarea de control iniciada - ETAPA 4");
+    ESP_LOGI(TAG, "📷 Setpoint desde cámara (si hay datos) o 0° (fijo)");
+    ESP_LOGI(TAG, "📖 Presiona 'h' para ayuda");
+
+    /* Tiempo desde la última detección de cámara */
+    uint32_t tiempo_sin_camara = 0U;
+    const uint32_t TIMEOUT_CAMARA_MS = 1000U;  /* 1 segundo sin cámara → setpoint = 0° */
 
     for (;;) {
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PERIODO_MUESTREO_MS));
@@ -517,16 +502,53 @@ void vTaskControl(void *pvParameters)
         int64_t now_us = esp_timer_get_time();
         float dt_s = (float)(now_us - s_last_update_us) / 1000000.0f;
         s_last_update_us = now_us;
+        uint32_t ahora_ms = (uint32_t)(now_us / 1000ULL);
 
-        /* ⭐ LEER TECLADO Y ACTUALIZAR SETPOINT ⭐ */
-        leer_comando_teclado(&setpoint_actual);
-        control_fijar_setpoint(setpoint_actual);
+        /* ⭐ LEER TECLADO (SOLO DIAGNÓSTICO) ⭐ */
+        leer_comando_teclado();
 
+        /* ⭐⭐⭐ LÓGICA DE SETPOINT: CÁMARA O 0° FIJO ⭐⭐⭐ */
+        bool camara_detectada = false;
+        
+        if (xQueuePeek(xColaVisionControl, &vision_data, 0U) == pdPASS) {
+            if (vision_data.deteccion_valida) {
+                camara_detectada = true;
+                s_ultimo_angulo_camara = vision_data.angulo_maestro;
+                s_ultimo_timestamp_camara = ahora_ms;
+                s_tiene_datos_camara = true;
+                
+                /* ✅ HAY CÁMARA → Setpoint = ángulo de la cámara */
+                setpoint_actual = vision_data.angulo_maestro;
+                control_fijar_setpoint(setpoint_actual);
+                
+                static uint32_t ultimo_log_camara = 0U;
+                if ((ahora_ms - ultimo_log_camara) >= 500U) {
+                    ESP_LOGI(TAG, "📷 Cámara: %.1f° → Setpoint: %.1f°", 
+                             vision_data.angulo_maestro, setpoint_actual);
+                    ultimo_log_camara = ahora_ms;
+                }
+            }
+        }
+
+        /* Verificar si ha pasado demasiado tiempo sin cámara */
+        if (!camara_detectada && s_tiene_datos_camara) {
+            tiempo_sin_camara = ahora_ms - s_ultimo_timestamp_camara;
+            if (tiempo_sin_camara > TIMEOUT_CAMARA_MS) {
+                /* ❌ NO HAY CÁMARA → Setpoint = 0° (fijo) */
+                setpoint_actual = 0.0f;
+                control_fijar_setpoint(setpoint_actual);
+                s_tiene_datos_camara = false;
+                ESP_LOGW(TAG, "⏰ Sin cámara por %d ms → Setpoint = 0° (fijo)", tiempo_sin_camara);
+            }
+        }
+
+        /* ⭐ LEER ÁNGULO DEL SENSOR (IGUAL QUE ETAPA 3) ⭐ */
         if (xQueuePeek(xColaSensorControl, &sensor_data, 0U) == pdPASS) {
             s_filtered_angle = (ANGLE_FILTER_ALPHA * sensor_data.angulo_actual) + 
                               ((1.0f - ANGLE_FILTER_ALPHA) * s_filtered_angle);
         }
 
+        /* ⭐ CALCULAR PWM (EXACTAMENTE IGUAL QUE ETAPA 3) ⭐ */
         float pwm_left = 0.0f;
         float pwm_right = 0.0f;
 
@@ -537,42 +559,46 @@ void vTaskControl(void *pvParameters)
             &pwm_right
         );
 
+        /* ⭐ ENVIAR AL ACTUADOR (IGUAL QUE ETAPA 3) ⭐ */
         actuador_data.pwm_izquierdo = pwm_left;
         actuador_data.pwm_derecho = pwm_right;
         xQueueOverwrite(xColaControlActuador, &actuador_data);
 
-        //
-        telemetry_packet_t packet;
+        /* ⭐ ENVIAR TELEMETRÍA ⭐ */
+        static uint32_t ultimo_envio = 0U;
+        if ((ahora_ms - ultimo_envio) >= 500U) {
+            telemetry_packet_t packet;
+            packet.master_angle = s_ctrl.target_reference;
+            packet.follower_angle = s_filtered_angle;
+            packet.setpoint_angle = s_ctrl.ramped_reference;
+            packet.pwm_left = pwm_left;
+            packet.pwm_right = pwm_right;
 
-        packet.master_angle   = 12.3f;      // Temporal
-        packet.follower_angle = s_filtered_angle;
-        packet.setpoint_angle = s_ctrl.ramped_reference;
-        packet.pwm_left       = pwm_left;
-        packet.pwm_right      = pwm_right;
+            packet.control_mode = 0;
+            packet.manual_setpoint = 0.0f;
 
-        espnow_display_send(&packet);
-        //
+            espnow_display_send(&packet);
+            ultimo_envio = ahora_ms;
+        }
 
+        /* ⭐ LOG CADA 200ms (IGUAL QUE ETAPA 3) ⭐ */
+        static uint32_t ultimo_log = 0U;
+        if ((ahora_ms - ultimo_log) >= 200U) {
+            float error = s_ctrl.ramped_reference - s_filtered_angle;
+            ESP_LOGI(TAG, "📊 %s Set:%.1f° Act:%.1f° Err:%+.1f° Modo:%s | PWM L:%5.1f%% R:%5.1f%%",
+                     s_tiene_datos_camara ? "📷CAM" : "⏸FJO",
+                     s_ctrl.ramped_reference,
+                     s_filtered_angle,
+                     error,
+                     mode_to_string(s_ctrl.operating_mode),
+                     pwm_left, pwm_right);
+            ultimo_log = ahora_ms;
+        }
 
         if (state != STATE_NORMAL) {
             if (!esta_en_modo_seguro()) {
                 ESP_LOGW(TAG, "⚠️ Emergencia activada! Estado: %s", state_to_string(state));
             }
-        }
-
-        static uint32_t ultimo_log = 0U;
-        uint32_t ahora_ms = (uint32_t)(now_us / 1000ULL);
-        if ((ahora_ms - ultimo_log) >= 200U) {
-            float error = s_ctrl.ramped_reference - s_filtered_angle;
-            ESP_LOGI(TAG, "📊 Set:%.1f° Act:%.1f° Err:%+.1f° Modo:%s | PWM L:%5.1f%% R:%5.1f%% | I:%5.2f V:%5.1f°/s",
-                     s_ctrl.ramped_reference,
-                     s_filtered_angle,
-                     error,
-                     mode_to_string(s_ctrl.operating_mode),
-                     pwm_left, pwm_right,
-                     s_ctrl.integral,
-                     s_ctrl.filtered_velocity);
-            ultimo_log = ahora_ms;
         }
     }
 }

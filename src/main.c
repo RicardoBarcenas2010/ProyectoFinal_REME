@@ -24,6 +24,7 @@
 #include "tareas.h"
 #include "hardware.h"
 #include "control.h"
+#include "espnow_display.h"
 
 static const char *TAG = "MAIN";
 
@@ -99,13 +100,18 @@ void app_main(void)
 
     /* 2. Inicializar WiFi (SOLO si es necesario) */
     #if defined(ETAPA_1) || defined(ETAPA_2) || defined(ETAPA_4) || defined(ETAPA_5)
+
         wifi_init_sta();
-        
-        /* Obtener MAC solo si es necesario */
-        // uint8_t mac[6];
-        // esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        // ESP_LOGI(TAG, "📡 MAC: %02X:%02X:%02X:%02X:%02X:%02X", 
-        //          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        uint8_t channel;
+        wifi_second_chan_t second;
+
+        ESP_ERROR_CHECK(esp_wifi_get_channel(&channel, &second));  
+
+        ESP_LOGI(TAG, "Canal maestro = %d", channel);
+
+        ESP_LOGI(TAG, "Inicializando ESP-NOW...");
+        ESP_ERROR_CHECK(espnow_display_init());
+
     #endif
 
     /* 3. Inicializar según etapa */

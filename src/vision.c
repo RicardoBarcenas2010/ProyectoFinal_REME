@@ -14,7 +14,7 @@
 
 #define TAG "VISION"
 #define LED_PIN 2
-#define BUZZER_PIN 13
+#define BUZZER_PIN 12
 
 /* ──────────────────────────────────────────────────────────────
  *  INICIALIZACIÓN (TU CÓDIGO ORIGINAL)

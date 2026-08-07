@@ -44,7 +44,7 @@ extern "C" {
 /* ──────────────────────────────────────────────────────────────
  *  PWM BASE - CON MÁS RANGO
  * ────────────────────────────────────────────────────────────── */
-#define PWM_LEFT_BASE           22.50f
+#define PWM_LEFT_BASE           22.50f //22.50
 #define PWM_RIGHT_BASE          24.50f
 #define PWM_LEFT_MIN            25.00f
 #define PWM_LEFT_MAX            45.00f  /* ← 45.50 → 50.00 */

@@ -13,6 +13,10 @@ typedef struct
 
     float pwm_right;
 
+    uint8_t control_mode;
+
+    float manual_setpoint;
+
 } telemetry_packet_t;
 
 #endif
