@@ -18,6 +18,7 @@
 #include "communication_protocol.h"
 #include "espnow_display.h"
 #include "espnow_receiver.h"
+#include "hal_led.h" 
 
 static const char *TAG = "CONTROL";
 
@@ -507,6 +508,29 @@ void vTaskControl(void *pvParameters)
 
         /* ⭐ LEER TECLADO (SOLO DIAGNÓSTICO) ⭐ */
         leer_comando_teclado();
+
+         bool pantalla_conectada = espnow_display_is_connected();
+
+        /* Control del LED */
+        if (pantalla_conectada) {
+            hal_led_apagar();   /* LED apagado = pantalla conectada */
+        } else {
+            hal_led_encender(); /* LED encendido = pantalla desconectada */
+        }
+
+        /* Si la pantalla está desconectada → forzar setpoint = 0° */
+        if (!pantalla_conectada) {
+            /* Forzar setpoint a 0° (la barra se va a 0°) */
+            if (s_tiene_datos_camara || s_ctrl.target_reference != 0.0f) {
+                setpoint_actual = 0.0f;
+                control_fijar_setpoint(setpoint_actual);
+                s_tiene_datos_camara = false;
+                ESP_LOGW(TAG, "🔌 MODO SEGURO: Pantalla desconectada → Setpoint = 0°");
+            }
+            
+            /* El PID sigue funcionando normalmente, pero con setpoint = 0° */
+            /* NO reducimos el PWM al 50% - solo vamos a 0° */
+        }
 
         /* ⭐⭐⭐ LÓGICA DE SETPOINT: CÁMARA O 0° FIJO ⭐⭐⭐ */
         bool camara_detectada = false;
