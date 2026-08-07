@@ -25,6 +25,7 @@
 #include "hardware.h"
 #include "control.h"
 #include "espnow_display.h"
+#include "espnow_receiver.h"
 
 static const char *TAG = "MAIN";
 
@@ -111,6 +112,7 @@ void app_main(void)
 
         ESP_LOGI(TAG, "Inicializando ESP-NOW...");
         ESP_ERROR_CHECK(espnow_display_init());
+        ESP_ERROR_CHECK(espnow_receiver_init());
 
     #endif
 

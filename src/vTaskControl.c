@@ -17,6 +17,7 @@
 
 #include "communication_protocol.h"
 #include "espnow_display.h"
+#include "espnow_receiver.h"
 
 static const char *TAG = "CONTROL";
 
@@ -509,37 +510,41 @@ void vTaskControl(void *pvParameters)
 
         /* ⭐⭐⭐ LÓGICA DE SETPOINT: CÁMARA O 0° FIJO ⭐⭐⭐ */
         bool camara_detectada = false;
-        
-        if (xQueuePeek(xColaVisionControl, &vision_data, 0U) == pdPASS) {
-            if (vision_data.deteccion_valida) {
-                camara_detectada = true;
-                s_ultimo_angulo_camara = vision_data.angulo_maestro;
-                s_ultimo_timestamp_camara = ahora_ms;
-                s_tiene_datos_camara = true;
-                
-                /* ✅ HAY CÁMARA → Setpoint = ángulo de la cámara */
-                setpoint_actual = vision_data.angulo_maestro;
-                control_fijar_setpoint(setpoint_actual);
-                
-                static uint32_t ultimo_log_camara = 0U;
-                if ((ahora_ms - ultimo_log_camara) >= 500U) {
-                    ESP_LOGI(TAG, "📷 Cámara: %.1f° → Setpoint: %.1f°", 
-                             vision_data.angulo_maestro, setpoint_actual);
-                    ultimo_log_camara = ahora_ms;
+
+        if (g_control_mode == CONTROL_MODE_MASTER)
+        {
+            if (xQueuePeek(xColaVisionControl, &vision_data, 0U) == pdPASS)
+            {
+                if (vision_data.deteccion_valida)
+                {
+                    camara_detectada = true;
+
+                    s_ultimo_angulo_camara = vision_data.angulo_maestro;
+                    s_ultimo_timestamp_camara = ahora_ms;
+                    s_tiene_datos_camara = true;
+
+                    setpoint_actual = vision_data.angulo_maestro;
+                    control_fijar_setpoint(setpoint_actual);
+                }
+            }
+
+            if (!camara_detectada && s_tiene_datos_camara)
+            {
+                tiempo_sin_camara = ahora_ms - s_ultimo_timestamp_camara;
+
+                if (tiempo_sin_camara > TIMEOUT_CAMARA_MS)
+                {
+                    setpoint_actual = 0.0f;
+                    control_fijar_setpoint(setpoint_actual);
+
+                    s_tiene_datos_camara = false;
                 }
             }
         }
-
-        /* Verificar si ha pasado demasiado tiempo sin cámara */
-        if (!camara_detectada && s_tiene_datos_camara) {
-            tiempo_sin_camara = ahora_ms - s_ultimo_timestamp_camara;
-            if (tiempo_sin_camara > TIMEOUT_CAMARA_MS) {
-                /* ❌ NO HAY CÁMARA → Setpoint = 0° (fijo) */
-                setpoint_actual = 0.0f;
-                control_fijar_setpoint(setpoint_actual);
-                s_tiene_datos_camara = false;
-                ESP_LOGW(TAG, "⏰ Sin cámara por %d ms → Setpoint = 0° (fijo)", tiempo_sin_camara);
-            }
+        else
+        {
+            setpoint_actual = g_manual_setpoint;
+            control_fijar_setpoint(setpoint_actual);
         }
 
         /* ⭐ LEER ÁNGULO DEL SENSOR (IGUAL QUE ETAPA 3) ⭐ */
@@ -574,8 +579,9 @@ void vTaskControl(void *pvParameters)
             packet.pwm_left = pwm_left;
             packet.pwm_right = pwm_right;
 
-            packet.control_mode = 0;
-            packet.manual_setpoint = 0.0f;
+            ESP_LOGI("TX",
+            "sizeof(packet) = %d",
+            sizeof(telemetry_packet_t));
 
             espnow_display_send(&packet);
             ultimo_envio = ahora_ms;
