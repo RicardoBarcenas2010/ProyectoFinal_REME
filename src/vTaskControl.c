@@ -492,11 +492,14 @@ void vTaskControl(void *pvParameters)
 
     ESP_LOGI(TAG, "🔄 Tarea de control iniciada - ETAPA 4");
     ESP_LOGI(TAG, "📷 Setpoint desde cámara (si hay datos) o 0° (fijo)");
+    ESP_LOGI(TAG, "🔌 Si la pantalla se desconecta → setpoint = 0° + LED encendido");
     ESP_LOGI(TAG, "📖 Presiona 'h' para ayuda");
 
-    /* Tiempo desde la última detección de cámara */
     uint32_t tiempo_sin_camara = 0U;
-    const uint32_t TIMEOUT_CAMARA_MS = 1000U;  /* 1 segundo sin cámara → setpoint = 0° */
+    const uint32_t TIMEOUT_CAMARA_MS = 1000U;
+    
+    /* Estado anterior para evitar logs repetidos */
+    bool estado_anterior_pantalla = false;
 
     for (;;) {
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PERIODO_MUESTREO_MS));
@@ -509,28 +512,71 @@ void vTaskControl(void *pvParameters)
         /* ⭐ LEER TECLADO (SOLO DIAGNÓSTICO) ⭐ */
         leer_comando_teclado();
 
-         bool pantalla_conectada = espnow_display_is_connected();
+        /* ================================================================
+         *  ⭐⭐⭐ VERIFICAR CONEXIÓN DE LA PANTALLA ⭐⭐⭐
+         *  Si la pantalla se desconecta → setpoint = 0° + LED encendido
+         *  Si la pantalla se reconecta → vuelve a normal
+         * ================================================================ */
+        bool pantalla_conectada = espnow_display_is_connected();
 
-        /* Control del LED */
+        /* CONTROL DEL LED */
         if (pantalla_conectada) {
             hal_led_apagar();   /* LED apagado = pantalla conectada */
         } else {
             hal_led_encender(); /* LED encendido = pantalla desconectada */
         }
 
-        /* Si la pantalla está desconectada → forzar setpoint = 0° */
+        /* SI LA PANTALLA ESTÁ DESCONECTADA → SETPOINT = 0° (SOLO ESO) */
         if (!pantalla_conectada) {
-            /* Forzar setpoint a 0° (la barra se va a 0°) */
+            /* ✅ SOLO CAMBIAR EL SETPOINT A 0° - NO REINICIAR NADA */
             if (s_tiene_datos_camara || s_ctrl.target_reference != 0.0f) {
                 setpoint_actual = 0.0f;
                 control_fijar_setpoint(setpoint_actual);
                 s_tiene_datos_camara = false;
-                ESP_LOGW(TAG, "🔌 MODO SEGURO: Pantalla desconectada → Setpoint = 0°");
+                
+                if (estado_anterior_pantalla != pantalla_conectada) {
+                    ESP_LOGW(TAG, "🔌 MODO SEGURO: Pantalla desconectada → Setpoint = 0°");
+                }
             }
             
-            /* El PID sigue funcionando normalmente, pero con setpoint = 0° */
-            /* NO reducimos el PWM al 50% - solo vamos a 0° */
+            estado_anterior_pantalla = pantalla_conectada;
+
+            /* Leer sensor y calcular PWM (con setpoint = 0°) */
+            if (xQueuePeek(xColaSensorControl, &sensor_data, 0U) == pdPASS) {
+                s_filtered_angle = (ANGLE_FILTER_ALPHA * sensor_data.angulo_actual) + 
+                                  ((1.0f - ANGLE_FILTER_ALPHA) * s_filtered_angle);
+            }
+
+            float pwm_left = 0.0f;
+            float pwm_right = 0.0f;
+            control_state_t state = control_pid_update(s_filtered_angle, dt_s, &pwm_left, &pwm_right);
+
+            actuador_data.pwm_izquierdo = pwm_left;
+            actuador_data.pwm_derecho = pwm_right;
+            xQueueOverwrite(xColaControlActuador, &actuador_data);
+
+            /* Log cada 500ms */
+            static uint32_t ultimo_log = 0U;
+            if ((ahora_ms - ultimo_log) >= 500U) {
+                float error = s_ctrl.ramped_reference - s_filtered_angle;
+                ESP_LOGI(TAG, "📊 🔌MODO SEGURO Set:%.1f° Act:%.1f° Err:%+.1f° Modo:%s | PWM L:%5.1f%% R:%5.1f%%",
+                         s_ctrl.ramped_reference, s_filtered_angle, error,
+                         mode_to_string(s_ctrl.operating_mode), pwm_left, pwm_right);
+                ultimo_log = ahora_ms;
+            }
+
+            continue;  /* Saltar el resto del loop mientras la pantalla esté desconectada */
         }
+
+        /* ================================================================
+         *  PANTALLA CONECTADA - Procesar normalmente
+         * ================================================================ */
+        
+        /* Si la pantalla se reconectó, mostrar mensaje */
+        if (!estado_anterior_pantalla && pantalla_conectada) {
+            ESP_LOGI(TAG, "✅ Pantalla RECONECTADA → Modo normal");
+        }
+        estado_anterior_pantalla = pantalla_conectada;
 
         /* ⭐⭐⭐ LÓGICA DE SETPOINT: CÁMARA O 0° FIJO ⭐⭐⭐ */
         bool camara_detectada = false;
@@ -542,7 +588,6 @@ void vTaskControl(void *pvParameters)
                 if (vision_data.deteccion_valida)
                 {
                     camara_detectada = true;
-
                     s_ultimo_angulo_camara = vision_data.angulo_maestro;
                     s_ultimo_timestamp_camara = ahora_ms;
                     s_tiene_datos_camara = true;
@@ -555,12 +600,10 @@ void vTaskControl(void *pvParameters)
             if (!camara_detectada && s_tiene_datos_camara)
             {
                 tiempo_sin_camara = ahora_ms - s_ultimo_timestamp_camara;
-
                 if (tiempo_sin_camara > TIMEOUT_CAMARA_MS)
                 {
                     setpoint_actual = 0.0f;
                     control_fijar_setpoint(setpoint_actual);
-
                     s_tiene_datos_camara = false;
                 }
             }
@@ -571,24 +614,18 @@ void vTaskControl(void *pvParameters)
             control_fijar_setpoint(setpoint_actual);
         }
 
-        /* ⭐ LEER ÁNGULO DEL SENSOR (IGUAL QUE ETAPA 3) ⭐ */
+        /* ⭐ LEER ÁNGULO DEL SENSOR ⭐ */
         if (xQueuePeek(xColaSensorControl, &sensor_data, 0U) == pdPASS) {
             s_filtered_angle = (ANGLE_FILTER_ALPHA * sensor_data.angulo_actual) + 
                               ((1.0f - ANGLE_FILTER_ALPHA) * s_filtered_angle);
         }
 
-        /* ⭐ CALCULAR PWM (EXACTAMENTE IGUAL QUE ETAPA 3) ⭐ */
+        /* ⭐ CALCULAR PWM ⭐ */
         float pwm_left = 0.0f;
         float pwm_right = 0.0f;
+        control_state_t state = control_pid_update(s_filtered_angle, dt_s, &pwm_left, &pwm_right);
 
-        control_state_t state = control_pid_update(
-            s_filtered_angle,
-            dt_s,
-            &pwm_left,
-            &pwm_right
-        );
-
-        /* ⭐ ENVIAR AL ACTUADOR (IGUAL QUE ETAPA 3) ⭐ */
+        /* ⭐ ENVIAR AL ACTUADOR ⭐ */
         actuador_data.pwm_izquierdo = pwm_left;
         actuador_data.pwm_derecho = pwm_right;
         xQueueOverwrite(xColaControlActuador, &actuador_data);
@@ -602,26 +639,18 @@ void vTaskControl(void *pvParameters)
             packet.setpoint_angle = s_ctrl.ramped_reference;
             packet.pwm_left = pwm_left;
             packet.pwm_right = pwm_right;
-
-            ESP_LOGI("TX",
-            "sizeof(packet) = %d",
-            sizeof(telemetry_packet_t));
-
             espnow_display_send(&packet);
             ultimo_envio = ahora_ms;
         }
 
-        /* ⭐ LOG CADA 200ms (IGUAL QUE ETAPA 3) ⭐ */
+        /* ⭐ LOG CADA 200ms ⭐ */
         static uint32_t ultimo_log = 0U;
         if ((ahora_ms - ultimo_log) >= 200U) {
             float error = s_ctrl.ramped_reference - s_filtered_angle;
             ESP_LOGI(TAG, "📊 %s Set:%.1f° Act:%.1f° Err:%+.1f° Modo:%s | PWM L:%5.1f%% R:%5.1f%%",
                      s_tiene_datos_camara ? "📷CAM" : "⏸FJO",
-                     s_ctrl.ramped_reference,
-                     s_filtered_angle,
-                     error,
-                     mode_to_string(s_ctrl.operating_mode),
-                     pwm_left, pwm_right);
+                     s_ctrl.ramped_reference, s_filtered_angle, error,
+                     mode_to_string(s_ctrl.operating_mode), pwm_left, pwm_right);
             ultimo_log = ahora_ms;
         }
 

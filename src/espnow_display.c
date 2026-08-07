@@ -15,10 +15,14 @@ static const uint8_t display_mac[6] =
     0x20, 0x50, 0x0D, 0x11, 0xBE, 0xD0
 };
 
-/* Variables de estado de conexión */
+/* ⭐ VARIABLES DE ESTADO ⭐ */
 static bool s_pantalla_conectada = false;
 static uint32_t s_ultimo_envio_ok = 0U;
-static const uint32_t TIMEOUT_PANTALLA_MS = 500U;  /* 500ms como pide el proyecto */
+static uint32_t s_ultimo_cambio_estado = 0U;
+static uint32_t s_ultimo_intento_reconexion = 0U;
+static const uint32_t TIMEOUT_PANTALLA_MS = 1000U;
+static const uint32_t DEBOUNCE_MS = 500U;
+static const uint32_t RECONEXION_INTERVALO_MS = 5000U;  /* Intentar reconectar cada 5 segundos */
 
 /*----------------------------------------------------------*/
 
@@ -29,15 +33,39 @@ static void send_cb(const esp_now_send_info_t *tx_info,
     
     if (status == ESP_NOW_SEND_SUCCESS) {
         s_ultimo_envio_ok = ahora;
-        if (!s_pantalla_conectada) {
-            s_pantalla_conectada = true;
-            ESP_LOGI(TAG, "✅ Pantalla CONECTADA");
-        }
+        ESP_LOGD(TAG, "ESP-NOW TX -> OK");
     } else {
-        if (s_pantalla_conectada) {
-            s_pantalla_conectada = false;
-            ESP_LOGW(TAG, "⚠️ Pantalla DESCONECTADA (envío fallido)");
-        }
+        ESP_LOGD(TAG, "ESP-NOW TX -> FAIL");
+    }
+}
+
+/*----------------------------------------------------------*/
+
+/* ⭐ FUNCIÓN PARA RE-AGREGAR EL PEER ⭐ */
+static void reconectar_pantalla(void)
+{
+    esp_now_peer_info_t peer = {0};
+
+    memcpy(peer.peer_addr,
+           display_mac,
+           ESP_NOW_ETH_ALEN);
+
+    peer.channel = 0;
+    peer.ifidx = WIFI_IF_STA;
+    peer.encrypt = false;
+
+    /* Intentar eliminar el peer primero (si existe) */
+    esp_now_del_peer(display_mac);
+    
+    /* Agregar el peer nuevamente */
+    esp_err_t err = esp_now_add_peer(&peer);
+    
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "✅ Pantalla reconectada como peer ESP-NOW");
+        /* Reseteamos el timer de éxito para forzar nueva conexión */
+        s_ultimo_envio_ok = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    } else {
+        ESP_LOGW(TAG, "⚠️ Error al reconectar pantalla: %s", esp_err_to_name(err));
     }
 }
 
@@ -81,8 +109,11 @@ esp_err_t espnow_display_init(void)
 
     ESP_LOGI(TAG, "Pantalla agregada como peer ESP-NOW");
     
-    s_pantalla_conectada = false;
+    /* Inicializar estado */
+    s_pantalla_conectada = true;
     s_ultimo_envio_ok = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    s_ultimo_cambio_estado = 0U;
+    s_ultimo_intento_reconexion = 0U;
 
     return ESP_OK;
 }
@@ -96,11 +127,40 @@ esp_err_t espnow_display_send(const telemetry_packet_t *packet)
         (const uint8_t *)packet,
         sizeof(telemetry_packet_t));
     
-    /* Verificar timeout */
+    /* Verificar timeout y aplicar filtro anti-parpadeo */
     uint32_t ahora = (uint32_t)(esp_timer_get_time() / 1000ULL);
-    if (s_pantalla_conectada && (ahora - s_ultimo_envio_ok) > TIMEOUT_PANTALLA_MS) {
-        s_pantalla_conectada = false;
-        ESP_LOGW(TAG, "⚠️ Pantalla DESCONECTADA (timeout: %d ms)", TIMEOUT_PANTALLA_MS);
+    bool estado_real;
+    
+    /* Determinar estado real basado en el tiempo desde el último éxito */
+    if ((ahora - s_ultimo_envio_ok) > TIMEOUT_PANTALLA_MS) {
+        estado_real = false;
+    } else {
+        estado_real = true;
+    }
+    
+    /* ⭐ APLICAR FILTRO DEBOUNCE ⭐ */
+    if (estado_real != s_pantalla_conectada) {
+        if ((ahora - s_ultimo_cambio_estado) > DEBOUNCE_MS) {
+            s_pantalla_conectada = estado_real;
+            s_ultimo_cambio_estado = ahora;
+            
+            if (estado_real) {
+                ESP_LOGI(TAG, "✅ Pantalla CONECTADA (estable)");
+            } else {
+                ESP_LOGW(TAG, "⚠️ Pantalla DESCONECTADA (estable)");
+                s_ultimo_intento_reconexion = 0U;  /* Resetear timer para reconexión */
+            }
+        }
+    }
+    
+    /* ⭐⭐⭐ INTENTAR RECONEXIÓN SI ESTÁ DESCONECTADA ⭐⭐⭐ */
+    if (!s_pantalla_conectada) {
+        /* Intentar reconectar cada RECONEXION_INTERVALO_MS */
+        if ((ahora - s_ultimo_intento_reconexion) > RECONEXION_INTERVALO_MS) {
+            ESP_LOGI(TAG, "🔄 Intentando reconectar pantalla...");
+            reconectar_pantalla();
+            s_ultimo_intento_reconexion = ahora;
+        }
     }
     
     return ret;
