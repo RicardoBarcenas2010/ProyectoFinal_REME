@@ -47,11 +47,11 @@ static uint32_t percent_to_duty(float percent)
 
 esp_err_t hal_esc_inicializar(void)
 {
-    ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "🔧 INICIALIZANDO ESC");
-    ESP_LOGI(TAG, "   Motor IZQUIERDO: GPIO %d", PIN_MOTOR_IZQ_PWM);
-    ESP_LOGI(TAG, "   Motor DERECHO:   GPIO %d", PIN_MOTOR_DER_PWM);
-    ESP_LOGI(TAG, "========================================");
+   // ESP_LOGI(TAG, "========================================");
+   // ESP_LOGI(TAG, "🔧 INICIALIZANDO ESC");
+   // ESP_LOGI(TAG, "   Motor IZQUIERDO: GPIO %d", PIN_MOTOR_IZQ_PWM);
+   // ESP_LOGI(TAG, "   Motor DERECHO:   GPIO %d", PIN_MOTOR_DER_PWM);
+   // ESP_LOGI(TAG, "========================================");
 
     /* Configurar timer LEDC */
     ledc_timer_config_t timer_config = {
@@ -75,7 +75,7 @@ esp_err_t hal_esc_inicializar(void)
         .flags.output_invert = 0
     };
     ESP_ERROR_CHECK(ledc_channel_config(&left_config));
-    ESP_LOGI(TAG, "✅ Canal IZQUIERDO (GPIO %d) configurado", PIN_MOTOR_IZQ_PWM);
+    //ESP_LOGI(TAG, "✅ Canal IZQUIERDO (GPIO %d) configurado", PIN_MOTOR_IZQ_PWM);
 
     /* Configurar canal derecho (GPIO 15) */
     ledc_channel_config_t right_config = {
@@ -89,12 +89,12 @@ esp_err_t hal_esc_inicializar(void)
         .flags.output_invert = 0
     };
     ESP_ERROR_CHECK(ledc_channel_config(&right_config));
-    ESP_LOGI(TAG, "✅ Canal DERECHO (GPIO %d) configurado", PIN_MOTOR_DER_PWM);
+    //ESP_LOGI(TAG, "✅ Canal DERECHO (GPIO %d) configurado", PIN_MOTOR_DER_PWM);
 
     /* Detener motores */
     hal_esc_parar_motores();
 
-    ESP_LOGI(TAG, "✅ ESC inicializado correctamente");
+   // ESP_LOGI(TAG, "✅ ESC inicializado correctamente");
     return ESP_OK;
 }
 
@@ -144,7 +144,7 @@ void hal_esc_parar_motores(void)
     ledc_set_duty(LEDC_SPEED_MODE, LEDC_CHANNEL_1, percent_to_duty(0.0f));
     ledc_update_duty(LEDC_SPEED_MODE, LEDC_CHANNEL_1);
     
-    ESP_LOGI(TAG, "⏹ Motores detenidos (GPIO %d y %d)", PIN_MOTOR_IZQ_PWM, PIN_MOTOR_DER_PWM);
+    //ESP_LOGI(TAG, "⏹ Motores detenidos (GPIO %d y %d)", PIN_MOTOR_IZQ_PWM, PIN_MOTOR_DER_PWM);
 }
 
 /* ⭐ NUEVA FUNCIÓN: ARMADO SIMULTÁNEO ⭐ */
@@ -164,7 +164,7 @@ void hal_esc_armar_simultaneo(float percent_izq, float percent_der)
     static uint32_t ultimo_log = 0U;
     uint32_t ahora = (uint32_t)(esp_timer_get_time() / 1000ULL);
     if ((ahora - ultimo_log) >= 1000U) {
-        ESP_LOGI(TAG, "🔧 SIMULTÁNEO: IZQ=%.1f%% DER=%.1f%%", percent_izq, percent_der);
+       // ESP_LOGI(TAG, "🔧 SIMULTÁNEO: IZQ=%.1f%% DER=%.1f%%", percent_izq, percent_der);
         ultimo_log = ahora;
     }
 }

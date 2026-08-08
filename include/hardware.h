@@ -59,9 +59,9 @@ extern "C" {
 /* ──────────────────────────────────────────────────────────────
  *  CONTROL PID - MODO NORMAL
  * ────────────────────────────────────────────────────────────── */
-#define NORMAL_KP               1.0f
+#define NORMAL_KP               1.2f
 #define NORMAL_KI               0.75f
-#define NORMAL_KD               0.3f
+#define NORMAL_KD               0.1f
 #define NORMAL_INTEGRAL_MAX     4.00f
 #define NORMAL_OUTPUT_MAX       5.00f
 

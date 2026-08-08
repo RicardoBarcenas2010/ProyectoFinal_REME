@@ -71,11 +71,12 @@ esp_err_t hal_potenciometro_inicializar(void)
     };
     ret = adc_oneshot_config_channel(adc_handle, ADC_POT_CHANNEL, &config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Error al configurar canal: %d", ret);
+        
+        //ESP_LOGE(TAG, "Error al configurar canal: %d", ret);
         return ret;
     }
 
-    ESP_LOGI(TAG, "ADC inicializado en GPIO %d (Canal %d)", PIN_POTENCIOMETRO, ADC_POT_CHANNEL);
+   // ESP_LOGI(TAG, "ADC inicializado en GPIO %d (Canal %d)", PIN_POTENCIOMETRO, ADC_POT_CHANNEL);
     return ESP_OK;
 }
 

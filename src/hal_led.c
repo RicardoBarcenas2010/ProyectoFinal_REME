@@ -1,6 +1,6 @@
 /**
  * @file hal_led.c
- * @brief Control del LED de alerta
+ * @brief Control del LED de alerta.
  */
 
 #include "hal_led.h"
@@ -12,11 +12,6 @@
 static const char *TAG = "HAL_LED";
 static bool s_led_encendido = false;
 static bool s_led_parpadeando = false;
-static uint32_t s_ultimo_cambio = 0U;
-
-/* ──────────────────────────────────────────────────────────────
- *  INICIALIZACIÓN
- * ────────────────────────────────────────────────────────────── */
 
 esp_err_t hal_led_inicializar(void)
 {
@@ -33,13 +28,9 @@ esp_err_t hal_led_inicializar(void)
     s_led_encendido = false;
     s_led_parpadeando = false;
 
-    ESP_LOGI(TAG, "LED inicializado en GPIO %d", PIN_LED_ALERTA);
+    ESP_LOGI(TAG, "LED en GPIO %d", PIN_LED_ALERTA);
     return ESP_OK;
 }
-
-/* ──────────────────────────────────────────────────────────────
- *  CONTROL DEL LED
- * ────────────────────────────────────────────────────────────── */
 
 void hal_led_encender(void)
 {
@@ -53,24 +44,6 @@ void hal_led_apagar(void)
     gpio_set_level(PIN_LED_ALERTA, 0);
     s_led_encendido = false;
     s_led_parpadeando = false;
-}
-
-void hal_led_parpadear(uint32_t intervalo_ms)  /* ← FUNCIÓN QUE FALTA */
-{
-    s_led_parpadeando = true;
-    
-    uint32_t ahora = (uint32_t)(esp_timer_get_time() / 1000ULL);
-    
-    if ((ahora - s_ultimo_cambio) >= intervalo_ms) {
-        if (s_led_encendido) {
-            gpio_set_level(PIN_LED_ALERTA, 0);
-            s_led_encendido = false;
-        } else {
-            gpio_set_level(PIN_LED_ALERTA, 1);
-            s_led_encendido = true;
-        }
-        s_ultimo_cambio = ahora;
-    }
 }
 
 bool hal_led_esta_encendido(void)
